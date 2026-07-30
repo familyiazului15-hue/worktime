@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Терминал сканирования</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <style>
+        .view { display: none; }
+        .view.active { display: flex; }
+        body { -webkit-user-select: none; user-select: none; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col items-center justify-center p-4 font-sans select-none">
+
+    <!-- ЭКРАН 1: СКАНИРОВАНИЕ -->
+    <div id="view-scanner" class="view active w-full max-w-md flex-col items-center">
+        <div class="text-center mb-8">
+            <h1 class="text-xl font-medium text-slate-400 mb-2">Система авторизации</h1>
+            <p class="text-xs text-slate-500">Отсканируйте карту или введите код доступа</p>
+        </div>
+        <input 
+            type="text" 
+            id="barcode-input" 
+            placeholder="Ожидание..." 
+            class="w-full px-4 py-8 text-3xl text-center bg-slate-900 border-2 border-slate-800 rounded-3xl shadow-2xl focus:outline-none focus:border-indigo-500 text-indigo-400 font-mono tracking-widest transition-all"
+            autofocus
+        >
+    </div>
+
+    <!-- ЭКРАН 2: КАРТОЧКА ДЕЙСТВИЯ -->
+    <div id="view-action" class="view w-full max-w-md bg-slate-900 p-8 rounded-3xl shadow-2xl border border-slate-800 flex-col text-center">
+        <div class="mb-8">
+            <h2 id="emp-name" class="text-3xl font-bold text-white tracking-tight">---</h2>
+            <p id="emp-time" class="text-base text-indigo-400 font-mono mt-2 bg-indigo-950/40 inline-block px-3 py-1 rounded-full border border-indigo-900/50">---</p>
+        </div>
+        <div class="space-y-4">
+            <button id="btn-action" class="w-full py-5 rounded-2xl font-bold text-lg text-white transition-all transform active:scale-95 shadow-lg cursor-pointer"></button>
+            <button onclick="backToScanner()" class="w-full py-4 rounded-2xl font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 active:scale-95 transition-all cursor-pointer">Отмена</button>
+        </div>
+    </div>
+
+    <script>
+        const firebaseConfig = { 
+            apiKey: "AIzaSyDmXlxkW8m6u-M_-l_iYIBE2w32LmHUxVA", 
+            authDomain: "family-work-time.firebaseapp.com", 
+            databaseURL: "https://family-work-time-default-rtdb.firebaseio.com", 
+            projectId: "family-work-time", 
+            storageBucket: "family-work-time.firebasestorage.app", 
+            messagingSenderId: "959352680173", 
+            appId: "1:959352680173:web:9f34f24007cd52fe90e6e4", 
+            measurementId: "G-CH6YKMK02V" 
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let employees = [];
+        let logs = [];
+        let currentEmp = null;
+        let scanTimeout = null;
+
+        db.ref('employees').on('value', snapshot => {
+            const data = snapshot.val();
+            employees = data ? Object.values(data) : [];
+        });
+
+        db.ref('logs').on('value', snapshot => {
+            const data = snapshot.val();
+            logs = data ? Object.values(data) : [];
+        });
+
+        const input = document.getElementById('barcode-input');
+        
+        document.body.addEventListener('click', () => {
+            if (document.getElementById('view-scanner').classList.contains('active')) input.focus();
+        });
+
+        function processBarcode(code) {
+            code = code.trim();
+            if (!code) return;
+
+            const emp = employees.find(e => String(e.id) === String(code));
+            if (emp) { 
+                currentEmp = emp; 
+                showActionScreen(); 
+            } else { 
+                alert('Сотрудник со штрих-кодом "' + code + '" не найден'); 
+            }
+        }
+
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                clearTimeout(scanTimeout);
+                const code = input.value;
+                input.value = '';
+                processBarcode(code);
+            }
+        });
+
+        input.addEventListener('input', () => {
+            clearTimeout(scanTimeout);
+            scanTimeout = setTimeout(() => {
+                const code = input.value;
+                if (code.trim().length > 0) {
+                    input.value = '';
+                    processBarcode(code);
+                }
+            }, 300);
+        });
+
+        function showActionScreen() {
+            document.getElementById('view-scanner').classList.remove('active');
+            document.getElementById('view-action').classList.add('active');
+            
+            document.getElementById('emp-name').textContent = currentEmp.name;
+            document.getElementById('emp-time').textContent = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+            
+            const activeLog = logs.find(l => String(l.empId) === String(currentEmp.id) && !l.out);
+            const btn = document.getElementById('btn-action');
+
+            if (!activeLog) {
+                btn.textContent = "Зарегистрировать приход";
+                btn.className = "w-full py-5 rounded-2xl font-bold text-lg text-white bg-emerald-600 hover:bg-emerald-500 active:scale-95 transition-all cursor-pointer";
+                btn.onclick = () => {
+                    const now = new Date();
+                    const newLog = { 
+                        id: 'log_' + Date.now(), 
+                        empId: currentEmp.id, 
+                        date: now.toISOString().split('T')[0], 
+                        in: now.toISOString(), 
+                        out: null 
+                    };
+                    db.ref('logs/' + newLog.id).set(newLog);
+                    backToScanner();
+                };
+            } else {
+                btn.textContent = "Зарегистрировать уход";
+                btn.className = "w-full py-5 rounded-2xl font-bold text-lg text-white bg-rose-600 hover:bg-rose-500 active:scale-95 transition-all cursor-pointer";
+                btn.onclick = () => { 
+                    activeLog.out = new Date().toISOString(); 
+                    db.ref('logs/' + activeLog.id).set(activeLog);
+                    backToScanner(); 
+                };
+            }
+        }
+
+        function backToScanner() {
+            currentEmp = null;
+            document.getElementById('view-action').classList.remove('active');
+            document.getElementById('view-scanner').classList.add('active');
+            setTimeout(() => input.focus(), 50);
+        }
+    </script>
+</body>
+</html>
